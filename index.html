@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Algorithm Cost Comparison</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans p-6">
+
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-8">
+            <h1 class="text-3xl font-bold text-slate-900">Algorithm Cost Simulator</h1>
+            <p class="text-slate-600 mt-2">Vary the Solar and Demand parameters to see how Solar First, Grid First, and the Proposed Algorithm react. Cost is calculated based on $\beta_{max} = 180$ and $\theta_{Th} = 80$.</p>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <!-- Controls Sidebar -->
+            <div class="md:col-span-1 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-semibold mb-4 text-slate-800">Parameters</h2>
+                
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">H1 Solar: <span id="h1s-val" class="font-bold text-indigo-600">20</span> units</label>
+                    <input type="range" id="h1s" min="0" max="200" step="5" value="20" class="w-full accent-indigo-600">
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">H1 Demand: <span id="h1d-val" class="font-bold text-indigo-600">40</span> units</label>
+                    <input type="range" id="h1d" min="0" max="200" step="5" value="40" class="w-full accent-indigo-600">
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-slate-700 mb-1">H2 Solar: <span id="h2s-val" class="font-bold text-indigo-600">20</span> units</label>
+                    <input type="range" id="h2s" min="0" max="200" step="5" value="20" class="w-full accent-indigo-600">
+                </div>
+
+                <div class="mt-8 p-4 bg-slate-100 rounded-lg text-sm text-slate-600">
+                    <p class="font-semibold text-slate-700 mb-2">System Constants:</p>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li>Battery Cap: 180</li>
+                        <li>Threshold: 80</li>
+                        <li>Tier 1 Rate: $5 / unit</li>
+                        <li>Tier 2 Rate: $7 / unit</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Chart Area -->
+            <div class="md:col-span-3 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <canvas id="costChart" width="400" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // System Constants
+        const CAP = 180;
+        const THETA = 80;
+        const TIER1 = 5;
+        const TIER2 = 7;
+
+        function getCost(grid) {
+            return grid <= THETA ? grid * TIER1 : grid * TIER2;
+        }
+
+        function simulate(h1_solar, h1_demand, h2_solar, h2_demand) {
+            // 1. Solar First (Naive)
+            let sf_net1 = h1_demand - h1_solar;
+            let sf_grid1 = Math.max(0, sf_net1);
+            let sf_batt1 = Math.min(CAP, Math.max(0, h1_solar - h1_demand));
+
+            let sf_net2 = h2_demand - h2_solar;
+            let sf_grid2 = Math.max(0, sf_net2 - sf_batt1);
+            let sf_cost = getCost(sf_grid1) + getCost(sf_grid2);
+
+            // 2. Grid First (Smart Buffering)
+            // It wants to buy up to THETA (80) in H1 to charge battery, unless restricted by battery cap
+            let max_grid1_to_fill_batt = Math.max(0, h1_demand + CAP - h1_solar);
+            let gf_grid1 = Math.max(sf_grid1, Math.min(THETA, max_grid1_to_fill_batt));
+            let gf_batt1 = Math.min(CAP, Math.max(0, h1_solar + gf_grid1 - h1_demand));
+
+            let gf_net2 = h2_demand - h2_solar;
+            let gf_grid2 = Math.max(0, gf_net2 - gf_batt1);
+            let gf_cost = getCost(gf_grid1) + getCost(gf_grid2);
+
+            // 3. Proposed (Adaptive)
+            // Evaluates both offline. Picks the cheapest. 
+            // If costs are tied, picks Solar First to avoid hoarding unnecessary energy.
+            let prop_cost = sf_cost;
+            if (gf_cost < sf_cost) {
+                prop_cost = gf_cost;
+            }
+
+            return { sf: sf_cost, gf: gf_cost, prop: prop_cost };
+        }
+
+        // Initialize Chart
+        const ctx = document.getElementById('costChart').getContext('2d');
+        const costChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // H2 Demand values
+                datasets: [
+                    {
+                        label: 'Solar First (Naive)',
+                        data: [],
+                        borderColor: '#ef4444', // Red
+                        backgroundColor: '#ef4444',
+                        borderWidth: 2,
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Grid First (Smart Buffering)',
+                        data: [],
+                        borderColor: '#3b82f6', // Blue
+                        backgroundColor: '#3b82f6',
+                        borderWidth: 2,
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Proposed (Adaptive Mode)',
+                        data: [],
+                        borderColor: '#10b981', // Green
+                        backgroundColor: '#10b981',
+                        borderWidth: 4, // Thicker to highlight it overlaps the best option
+                        borderDash: [5, 5], // Dashed so you can see the baseline underneath
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Total Cost vs H2 Demand (0 to 200 by 5s)',
+                        font: { size: 16 }
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.parsed.y !== null) {
+                                    label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.parsed.y);
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'H2 Demand (units)' }
+                    },
+                    y: {
+                        title: { display: true, text: 'Total Grid Cost ($)' },
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+
+        // Update Logic
+        function updateChart() {
+            const h1s = parseInt(document.getElementById('h1s').value);
+            const h1d = parseInt(document.getElementById('h1d').value);
+            const h2s = parseInt(document.getElementById('h2s').value);
+
+            document.getElementById('h1s-val').innerText = h1s;
+            document.getElementById('h1d-val').innerText = h1d;
+            document.getElementById('h2s-val').innerText = h2s;
+
+            const labels = [];
+            const sfData = [];
+            const gfData = [];
+            const propData = [];
+
+            // Sweep H2 Demand from 0 to 200 in steps of 5
+            for (let h2d = 0; h2d <= 200; h2d += 5) {
+                labels.push(h2d);
+                let results = simulate(h1s, h1d, h2s, h2d);
+                sfData.push(results.sf);
+                gfData.push(results.gf);
+                propData.push(results.prop);
+            }
+
+            costChart.data.labels = labels;
+            costChart.data.datasets[0].data = sfData;
+            costChart.data.datasets[1].data = gfData;
+            costChart.data.datasets[2].data = propData;
+            costChart.update();
+        }
+
+        // Event Listeners
+        document.getElementById('h1s').addEventListener('input', updateChart);
+        document.getElementById('h1d').addEventListener('input', updateChart);
+        document.getElementById('h2s').addEventListener('input', updateChart);
+
+        // Initial render
+        updateChart();
+    </script>
+</body>
+</html>
